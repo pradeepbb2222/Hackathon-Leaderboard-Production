@@ -1,0 +1,124 @@
+name: codebharat
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-codebharat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-codebharat}
+      POSTGRES_DB: ${POSTGRES_DB:-codebharat}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-codebharat} -d ${POSTGRES_DB:-codebharat}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: bitnamilegacy/minio:2024
+    restart: unless-stopped
+    # Newer MinIO builds listen on localhost unless the address is explicit.
+    entrypoint: ["/opt/bitnami/minio/bin/minio"]
+    command: ["server", "--address", "0.0.0.0:9000", "--console-address", "0.0.0.0:9001", "/bitnami/minio/data"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-codebharat}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-codebharat-secret}
+      MINIO_DEFAULT_BUCKETS: ${S3_BUCKET:-codebharat}
+      MINIO_ADDRESS: 0.0.0.0:9000
+      MINIO_CI_CD: "on"
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
+    volumes:
+      - minio:/bitnami/minio/data
+    ports:
+      - "${MINIO_PORT:-9000}:9002"
+
+  minio-proxy:
+    build:
+      context: ./deploy/socat
+    network_mode: service:minio
+    depends_on:
+      - minio
+    restart: unless-stopped
+
+  minio-init:
+    image: bitnamilegacy/minio:2024
+    depends_on:
+      - minio-proxy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-codebharat}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-codebharat-secret}
+      S3_BUCKET: ${S3_BUCKET:-codebharat}
+    volumes:
+      - ./deploy/minio-cors.json:/cors.json:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        until mc alias set local http://minio:9002 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do
+          echo "waiting for MinIO"
+          sleep 2
+        done
+        mc mb -p "local/$$S3_BUCKET" || true
+        mc anonymous set none "local/$$S3_BUCKET" || true
+        mc cors set "local/$$S3_BUCKET" /cors.json || true
+        echo "bucket ready"
+
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 4317
+      DATABASE_URL: postgresql://${POSTGRES_USER:-codebharat}:${POSTGRES_PASSWORD:-codebharat}@postgres:5432/${POSTGRES_DB:-codebharat}
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET in deploy/.env.prod}
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-s3}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9002}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://127.0.0.1:9000}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_BUCKET: ${S3_BUCKET:-codebharat}
+      S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-codebharat}
+      S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-codebharat-secret}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      FILE_SIZE_LIMIT_MB: ${FILE_SIZE_LIMIT_MB:-25}
+      TEAM_QUOTA_MB: ${TEAM_QUOTA_MB:-500}
+      EVENT_NAME: ${EVENT_NAME:-CodeBharat 2026}
+      EVENT_EDITION: ${EVENT_EDITION:-2nd Edition}
+      EVENT_VENUE: ${EVENT_VENUE:-IIIT Dharwad}
+      EVENT_DATES: ${EVENT_DATES:-3–4 December 2026}
+      EVENT_THEME: ${EVENT_THEME:-From Code to Concrete Innovation}
+      EVENT_LOGO_URL: ${EVENT_LOGO_URL:-}
+      DEMO_HINTS: ${DEMO_HINTS:-false}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-http://}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+volumes:
+  pgdata:
+  minio:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,16 @@
+# SITE_ADDRESS examples:
+#   http://            intranet or this laptop (no certificate)
+#   leaderboard.iiitdwd.ac.in     public name (Caddy gets HTTPS for you)
+{$SITE_ADDRESS:http://} {
+	@stream path /api/live/stream
+	handle @stream {
+		reverse_proxy app:4317 {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		encode gzip
+		reverse_proxy app:4317
+	}
+}

@@ -1,0 +1,252 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  TEAM
+  JUDGE
+}
+
+enum Track {
+  LEARNING
+  REGENERAX
+  INSIGHT
+  FARMING
+  SOCIETAL
+}
+
+enum ScoreStatus {
+  DRAFT
+  SUBMITTED
+}
+
+model User {
+  id             String         @id @default(cuid())
+  username       String         @unique
+  passwordHash   String
+  issuedPassword String?
+  role           Role
+  displayName    String
+  mustChangePassword Boolean    @default(false)
+  teamId         String?        @unique
+  team           Team?          @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  judge          Judge?
+  sessions       Session[]
+  announcements  Announcement[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Team {
+  id          String             @id @default(cuid())
+  code        String             @unique
+  name        String
+  track       Track
+  college     String
+  members     String
+  isFinalist  Boolean            @default(false)
+  quotaMb     Int?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  user        User?
+  submissions Submission[]
+  scores      JudgeScore[]
+  assignments JudgeAssignment[]
+
+  @@index([track])
+  @@index([isFinalist])
+}
+
+model Judge {
+  id          String             @id @default(cuid())
+  userId      String             @unique
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String             @default("Jury")
+  assignments JudgeAssignment[]
+  scores      JudgeScore[]
+}
+
+model JudgeAssignment {
+  id        String   @id @default(cuid())
+  judgeId   String
+  judge     Judge    @relation(fields: [judgeId], references: [id], onDelete: Cascade)
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([judgeId, teamId])
+  @@index([teamId])
+}
+
+model Milestone {
+  id              String       @id
+  code            String       @unique
+  name            String
+  summary         String
+  sortOrder       Int
+  openOffsetMin   Int
+  closeOffsetMin  Int
+  maxPoints       Int
+  fileRequired    Boolean      @default(false)
+  requireStatus   Boolean      @default(true)
+  requireProgress Boolean      @default(true)
+  requireGithub   Boolean      @default(false)
+  requireDemo     Boolean      @default(false)
+  requireVideo    Boolean      @default(false)
+  submissions     Submission[]
+}
+
+model Submission {
+  id             String               @id @default(cuid())
+  teamId         String
+  team           Team                 @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  milestoneId    String
+  milestone      Milestone            @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  statusText     String               @default("")
+  progress       Int                  @default(0)
+  githubUrl      String               @default("")
+  demoUrl        String               @default("")
+  videoUrl       String               @default("")
+  isLate         Boolean              @default(false)
+  lastActivityAt DateTime             @default(now())
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  files          SubmissionFile[]
+  revisions      SubmissionRevision[]
+
+  @@unique([teamId, milestoneId])
+  @@index([teamId])
+  @@index([milestoneId])
+  @@index([lastActivityAt])
+  @@index([progress, lastActivityAt])
+}
+
+model SubmissionRevision {
+  id           String     @id @default(cuid())
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  statusText   String
+  progress     Int
+  githubUrl    String
+  demoUrl      String
+  videoUrl     String
+  isLate       Boolean
+  actorName    String
+  createdAt    DateTime   @default(now())
+
+  @@index([submissionId, createdAt])
+}
+
+model SubmissionFile {
+  id           String     @id @default(cuid())
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  originalName String
+  storedName   String     @unique
+  mimeType       String
+  sizeBytes      Int
+  confirmed      Boolean   @default(false)
+  tokenHash      String?
+  tokenExpiresAt DateTime?
+  uploadedAt     DateTime  @default(now())
+
+  @@index([submissionId, confirmed])
+  @@index([tokenHash])
+}
+
+model JudgeScore {
+  id              String      @id @default(cuid())
+  judgeId         String
+  judge           Judge       @relation(fields: [judgeId], references: [id], onDelete: Cascade)
+  teamId          String
+  team            Team        @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  engineering     Int         @default(0)
+  impact          Int         @default(0)
+  prototype       Int         @default(0)
+  vision          Int         @default(0)
+  engineeringNote String      @default("")
+  impactNote      String      @default("")
+  prototypeNote   String      @default("")
+  visionNote      String      @default("")
+  overallComment  String      @default("")
+  status          ScoreStatus @default(DRAFT)
+  submittedAt     DateTime?
+  updatedAt       DateTime    @updatedAt
+  createdAt       DateTime    @default(now())
+
+  @@unique([judgeId, teamId])
+  @@index([teamId, status])
+  @@index([judgeId, status])
+}
+
+model Announcement {
+  id        String   @id @default(cuid())
+  title     String
+  body      String
+  authorId  String?
+  author    User?    @relation(fields: [authorId], references: [id], onDelete: SetNull)
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actorName  String
+  action     String
+  entityType String
+  entityId   String?
+  detail     String   @default("")
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model EventState {
+  id                 String    @id @default("event")
+  name               String    @default("CodeBharat 2026")
+  edition            String    @default("2nd Edition")
+  venue              String    @default("IIIT Dharwad")
+  theme              String    @default("From Code to Concrete Innovation")
+  datesLabel         String    @default("3–4 December 2026")
+  logoUrl            String    @default("")
+  startsAt           DateTime
+  paused             Boolean   @default(false)
+  pausedAt           DateTime?
+  accumulatedPauseMs Int       @default(0)
+  showCountdown      Boolean   @default(true)
+  submissionsLocked  Boolean   @default(false)
+  leaderboardHidden  Boolean   @default(false)
+  leaderboardFrozen  Boolean   @default(false)
+  feedbackReleased   Boolean   @default(false)
+  progressWeight     Int       @default(40)
+  judgeWeight        Int       @default(60)
+  simulationEnabled  Boolean   @default(false)
+  frozenSnapshot     String    @default("")
+  updatedAt          DateTime  @updatedAt
+}
+
+model RankMemory {
+  teamId        String   @id
+  previousRank  Int
+  publishedRank Int      @default(0)
+  updatedAt     DateTime @default(now())
+}
